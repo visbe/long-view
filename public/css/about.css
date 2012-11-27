@@ -1,0 +1,22 @@
+/*# © Copyright IBM Corporation 2011.*/
+
+#main {
+	width:800px;
+	margin:auto;
+	font-family: Georgia, "Times New Roman", serif;
+}
+
+h1,h3 {
+	text-align: center;
+}
+
+#feedback {
+	color:red;
+}
+
+#screenshot {
+	width:405px;
+	text-align:center;
+	margin:auto;
+
+}

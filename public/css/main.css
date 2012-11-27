@@ -1,0 +1,192 @@
+/*# © Copyright IBM Corporation 2011.*/
+
+#viz_main {
+	position:absolute;
+	left:0;
+	background:#fcfcfc;
+	z-index:1;
+}
+
+#viz_about {
+	display:none;
+	background:blue;
+	z-index:10001;
+	position:absolute;
+	left:0;
+}
+
+#viz_canvas1 {
+	position:absolute;
+	left:0;
+	background:transparent;
+	z-index:1000;
+}
+
+#viz_header {
+	position:absolute;
+	left:0;
+	background:white;
+	z-index:2000;
+	font-family: Helvetica,Sans-Serif;
+	margin:0;
+	padding:0;
+	height:80px;
+	margin-bottom:3px;
+	text-align:left;
+}
+
+#viz_search_header {
+	height:20px;
+	padding:5px;
+	font-family: Helvetica,Sans-Serif;
+	font-size:16px;
+	color:white;
+	font-weight:normal;
+	background:black;
+	opacity:0.8;
+}
+
+.viz_header {
+	float:left;
+	display:inline;
+	height: 60px;
+	margin:0;	
+	cursor:pointer;
+}
+
+.viz_header span {
+	padding:3px;	
+	color:white;
+	font-size: 12px;
+	text-transform:uppercase;
+	word-wrap:break-word;
+	display:block;
+}
+
+#viz_title {
+	position:absolute;
+	left:0;
+	background:white;
+	color:rbg(48,10,2);
+	z-index:8000;
+	font-family: "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue", Helvetica,Sans-Serif;
+	margin:0;
+	padding:0;	
+	font-size:16px;
+	line-height:22px;
+	padding-top:5px;
+	padding-bottom:5px;
+	display:table;
+	text-align:left;
+}
+
+#long_view {
+	font-size:24px;
+	padding-left:5px;
+	width:160px;
+	text-wrap:none;
+	display:table-cell;
+	vertical-align:middle;
+}
+
+#viz_title_url {
+	padding-left:10px;
+	border-left:1px gray solid;
+	text-wrap: normal;
+	display:table-cell;
+	padding-right:5px;
+}
+
+.viz_articles {
+	position:absolute;
+	z-index:10;
+	margin:0px;
+	padding:0;
+	text-align:left;
+	overflow:hidden;
+}
+
+.viz_title {
+	font-size: 12px;
+	font-family: Helvetica,Sans-Serif; 
+	margin-right: 5px;
+}
+
+#viz_content {
+	position:absolute;
+	z-index: 5000;
+	color: black;
+	margin: 0;
+	padding: 0;
+	padding-top:10px;
+	text-align:left;
+}
+
+#viz_content a {
+	text-decoration:none;
+	color:black;
+	cursor:pointer;
+}
+
+#viz_body {
+	font-family:'Times New Roman';
+	font-size: 12px;
+	line-height:18px;
+	margin-left:15px;
+	border-top: 1px gray dotted;
+	padding-top:2px;
+	padding-bottom:10px;
+	display:block;
+	margin-bottom:8px;
+}
+
+.viz_feedback {
+	height:20px;
+	color:white;
+}
+
+#viz_term_feedback {
+	position:absolute;
+	bottom:0;
+	display:none;
+	background:black;
+	opacity:.6;
+}
+
+#viz_term_feedback span {
+	cursor:pointer;
+}
+
+#viz_term_feedback img {
+	z-index:10000;
+}
+
+#viz_term_down {
+	float:right;
+}
+
+#viz_article_feedback img {
+	float:right;
+	background:#9BB1FF;
+	cursor:pointer;
+}
+
+#viz_thankyou {
+	width:100px;
+	height:20px;
+	border-radius: 4px;
+	background:#242424;
+	border:1px white solid;
+	box-shadow:1px 1px 2px #000000;
+	-webkit-box-shadow:1px 1px 2px #000000;
+	position:absolute;
+	z-index:20000;
+	display:none;
+	text-transform:uppercase;
+	color:white;
+	font-weight:bold;
+	font-size:12px;
+	text-align:center;
+	padding-top:5px;
+	margin-left:2px;
+}

@@ -1,0 +1,1024 @@
+// © Copyright IBM Corporation 2011.
+
+/**
+ * This file contains all the client-side functionality required for running The Long View.
+ * It requires jQuery and Processing.js (1.2.3), and is invoked by calling the method getArticleText
+ * from the bookmarklet script. Processing.js is assigned to the variable p throughout. Processing drawings
+ * are referred to as sketches.
+*/
+
+/*
+	LongView class
+	
+	Contains all methods and variables for The Long View.
+	
+	Class variables:
+	LongView.server - points to the sinatra server, e.g. localhost:4567
+	LongView.response - json object containing article information from the server
+	LongView.response_msg - msg from server if no results are returned (either failure, or no response)
+	LongView.user_id - randomly generated user_id for tracking feedback
+	
+	LongView.search_term_timelines - array of article lists; lists are organized by search terms
+	LongView.decade_timelines - hash of article lists; lists are organized by decade; decade is the key
+	LongView.search_terms  - array of search terms used
+	LongView.search_term_timelines_curr_index - index of the currently selected search term timeline; defaults to 0
+	LongView.search_term_timelines_prev_index - index of the previously selected search term timeline; defaults to 1
+	
+	LongView.timelines_w - width available for the sketch, after the NYT article is moved to the right
+	LongView.timelines_h - height available for the sketch; generally this is window height
+	LongView.time_colors - array of colors; each color will be assinged to a single pair of search terms
+	
+	LongView.selected_article - article that is highlighted by mouseover;
+		1000 is the 'none selected' value for search term timelines
+	LongView.decade_timelines_curr_index - decade that is selected by mouseover on the timeline; 
+		"1000" is the 'none selected' value for decade_timelines
+
+*/ 
+
+var LongView = {};
+
+LongView.server = "<%= @server %>";
+LongView.response; 
+LongView.response_msg = '';
+LongView.user_id = '';
+
+LongView.search_term_timelines = []; 
+LongView.decade_timelines = {}; 
+LongView.search_terms = []; 
+LongView.search_term_timelines_curr_index = 0; 
+LongView.search_term_timelines_prev_index = 1; 
+LongView.decade_timelines_curr_index = "2010"; 
+LongView.selected_article = 1000; 
+
+LongView.timelines_w; 
+LongView.timelines_h; 
+LongView.time_colors = [[115,0,70],[191,187,17],[255,194,0],[232,136,1],[201,60,0]]; 
+//LongView.time_colors = [[204,16,126],[204,201,18],[204,156,0],[204,106,2],[204,61,0]];
+
+
+/*
+	LongView.Article class
+	
+	@params: data - a json object from the server that contains data about a specific article
+	
+	Class assigns information about individual articles, including article title, link to full article,
+	publication date, specially formatted date for display (date_f), first paragraph of article (body),
+	the search terms that produced the article (search_terms), the height available for displaying
+	the article's title (h), and three vectors (http://processingjs.org/reference/PVector) that
+	describe the article's position on the full timeline (orig), its position as it moves (trans),
+	and the position is it approaching (dest).
+	
+	When an Article object is created it is also assigned to a decade timeline.
+	
+*/
+
+LongView.Article = function(data) {
+	this.title = data['title'].replace(/''/gi,"'").replace(/""/gi,'"'); //get rid of escaped quotes
+	this.url = data['url'];
+	this.date = new Date(data['date'].substr(0,4),parseInt(parseFloat(data['date'].substr(4,2)))-1,
+		parseInt(parseFloat(data['date'].substr(6,2))));
+	this.date_f = function(){
+		var d_str = this.date.toString().split(" ");
+		d_str[1] = d_str[1].substr(0,3)+".";
+		d_str[2] = d_str[2]+",";
+		return d_str.slice(1,4).join(" ");
+	}
+	this.body = data['body'].replace(/''/gi,"'").replace(/""/gi,'"'); //get rid of escaped quotes
+	this.search_terms;
+	this.h = 45;
+	this.orig;
+	this.trans;
+	this.dest;
+	var decade = this.date.getFullYear().toString().substr(0,3)+"0";
+	LongView.decade_timelines[decade].articles.push(this);
+}
+
+/*
+	LongView.SearchTermsTimeLine class
+	
+	@params: data - a json object from the server that contains a list of articles associated with 
+			pair of search terms
+	
+	Contains information about individual search term timelines, including search terms, the list of
+	Article objects contained in the timeline, the date of the oldest article in the timeline (sdate),
+	the date of newest article in the timeline (edate), and the x,y coordinates and width end height
+	of the search term html element.
+	
+	When a SearchTermsTimeLine object is created, it also creates an Article object for each of the articles
+	it contains.
+	
+*/
+
+LongView.SearchTermsTimeLine = function(data) {
+	this.search_terms = data['term'];	
+	var articles = [];
+	$.each(data['results'],function(i) {
+		var a = new LongView.Article(data['results'][i]);
+		a.search_terms = data['term'];
+		articles.push(a);	
+	});
+	this.articles = articles;
+	//this.length = data['results'].length;
+	this.sdate =  new Date(data['results'][data['results'].length-1]['date'].substr(0,4),
+		parseInt(parseFloat(data['results'][data['results'].length-1]['date'].substr(4,2)))-1,
+		parseInt(parseFloat(data['results'][data['results'].length-1]['date'].substr(6,2))));
+	this.edate = new Date(data['results'][0]['date'].substr(0,4),parseInt(parseFloat(data['results'][0]['date'].substr(4,2)))-1,
+		parseInt(parseFloat(data['results'][0]['date'].substr(6,2))));		
+	this.w;
+	this.h;
+	this.x;
+	this.y;
+}
+
+/*
+	LongView.DecadeTimeLine class
+	
+	@params: decade - string that contains the first year of a decade, e.g. "1980"
+	
+	Contains information about individual decade timelines, including the list of Article objects contained 
+	in the timeline, and the y coordinate and height of the Processing rectangle created for that decade.
+	(The x coordinate and width are constant for all decade timelines and assigned in the snakeTimeline
+	method.)
+		
+*/
+
+LongView.DecadeTimeLine = function(decade) {
+	this.articles = [];
+	//this.length; 
+	this.decade = decade;
+	this.y;
+	this.h;
+}
+
+/*
+	LongView.waiting function
+	
+	@params: p - the Processing.js object
+	
+	Called from LongView.getArticleText -> LongView.processingSketch. Creates a Processing sketch that 
+	is invoked everytime getArticleText is called (the start of the program). The sketch draws a pulsing 
+	green circle that indicates that the tool is waiting for a response from the server.
+		
+*/
+
+LongView.waiting = function(p) {
+	var t_width = LongView.timelines_w;
+	var min = 50;
+	var max = 100;
+	var trans = .01;
+	var grow = true;
+	var curr = 50;	
+	p.setup = function() {
+		p.size(t_width,$('#viz_canvas1').height());
+		p.noStroke();
+		p.smooth();
+		p.background(255,0);
+		p.fill(123,214,38);
+	}
+	
+	/*Grow and shrink green circle */
+	p.draw = function() {
+		p.background(255,0);		
+		if (curr>max){
+			grow = false
+		} else if (curr<min) {
+			grow=true;
+		}
+		if (grow==true){
+			curr = curr + curr*trans;
+		} else {
+			curr = curr - curr*trans;
+		}
+		p.ellipse(t_width/2,100,curr,curr);
+	}
+}
+
+/*
+	LongView.requestFailed function
+	
+	@params: p - the Processing.js object
+	
+	Called from LongView.getArticleText -> LongView.processingSketch. Creates a Processing sketch that is invoked when a fail message 
+	is returned from the server. The sketch draws a sad face and tells the user that there were no search results.
+		
+*/
+
+LongView.requestFailed = function(p) {
+	var t_width = LongView.timelines_w;
+	p.setup = function() {
+		p.size(t_width,$('#viz_canvas1').height());		
+		p.smooth();
+		p.background(255,0);
+		p.fill(200,0,0);
+	}
+	
+	//Draw frowny face
+	p.draw = function() {
+		p.background(255,0);
+		p.noStroke();
+		p.fill(200,0,0);
+		p.ellipse(t_width/2,100,100,100);
+		p.stroke(255);
+		p.strokeWeight(10);
+		p.noFill();
+		p.arc(t_width/2,155,65,80,p.PI+p.PI/4,p.TWO_PI-p.PI/4);
+		p.fill(255);
+		p.ellipse(t_width/2+18,85,8,8);
+		p.stroke(4);
+		p.line(t_width/2-23,85-5,t_width/2-13,85+5)
+		p.line(t_width/2-23,85+5,t_width/2-13,85-5)
+		p.textSize(30);
+		p.fill(100,100,100);
+		p.textAlign(p.CENTER);
+		p.textLeading(30);
+		p.text(LongView.response_msg,t_width/4,200,t_width/2,200);
+	}
+}
+
+/*
+	LongView.html_scaffolding function
+	
+	@params: p - the Processing.js object; a sketch is not created in this function, but the function
+			needs to know where the mouse is inside the timeline sketch
+	
+	Called from LongView.snakeTimeline before draw. This function adds a number of the static html elements displayed in 
+	The Long View and then positions them. In particular, it adds The Long View title, an About div 
+	(TO DO: add content to About div), and the feedback divs. The feedback divs contain the thumbs up/down
+	images, clicking on which sends the server information about either search term selection or article selection.
+		
+*/
+
+LongView.html_scaffolding = function(p) {
+	var t_width = LongView.timelines_w;
+	
+	//Add and position The Long View Title
+	$('body').append("<div class='viz_obj' id='viz_title'><span id='long_view'>The Long View </span><span id='viz_title_url'>"+
+		$('title').text().split(" - ")[0]+ "</span></div>"); 
+	$('#viz_title').css({'top':$(window).scrollTop(),'width':t_width+'px'});
+	$('#viz_title_url').css({'width':t_width-$('#long_view').outerWidth(true)+'px'});
+
+	// Add and position the About div
+	$('body').append("<div class='viz_obj' id='viz_about'>ABOUT THE LONG VIEW</div>");
+	$('#viz_about').css({'top':$(window).scrollTop()+$('#viz_title').outerHeight(true),'width':t_width+'px',
+		'height':$(window).height()-$('#viz_title').height()+'px'});
+	$('#long_view').click(function(){
+		$('#viz_about').slideToggle('slow');	
+	});
+	
+	//Add and position the Search Term Boxes
+	$('body').append("<div class='viz_obj' id='viz_header'><div id='viz_search_header'>Related Search Terms</div></div>");
+	$('#viz_header').css({'width':t_width+'px'});
+	$.each(LongView.search_terms,function(i) {
+		var col = LongView.time_colors[i];
+		var col_str = "("+col.join(",")+")";
+		var keys = LongView.search_terms[i].split("+").join(", ").replace(/"/gi,'');
+		$('#viz_header').append("<div id='viz_header"+i+"' class='viz_header'><span>"+keys+"</span></div>");
+		$('#viz_header'+i).css({'background-color':'rgb'+col_str,'width':t_width/LongView.search_terms.length+'px'}); 
+		var search_terms = LongView.search_terms[i];
+		var left = Math.floor(t_width/LongView.search_terms.length)*i;
+		
+		//On mousing over a search term box, attach info about the search terms and article context 
+		//to search term feedback div, then show the feedback div so the user can interact with it
+		$('#viz_header'+i).mouseover(function(){
+			$('#viz_term_feedback').css({'left':left});
+			var params = {};
+			params['user_id'] = LongView.user_id;
+			params['search_date'] = new Date();
+			params['main_url'] = document.URL;
+			params['type'] = 'search_term_feedback';
+			params['value'] = search_terms;			
+			params['extra'] = '';
+			for (i in params) {
+				params[i] = encodeURIComponent(params[i]);
+			}					
+			$('#viz_term_feedback').data('viz_feedback_params',params);		
+			$('#viz_term_feedback').show();
+		});		
+		var index = i;
+		
+		//Clicking a search term box selects a search_term_timeline to be displayed
+		//It also resets any previously selected timelines (both search_term_timelines and decade_timelines)
+		$('#viz_header'+i).click(function(){
+             if ($(".viz_articles").length>0){
+                $(".viz_articles").remove();
+            }    
+            
+            LongView.search_term_timelines_prev_index = LongView.search_term_timelines_curr_index;
+            LongView.reset_articles(LongView.search_term_timelines,LongView.search_term_timelines_prev_index);
+            LongView.reset_articles(LongView.decade_timelines,LongView.decade_timelines_curr_index);
+			LongView.search_term_timelines_curr_index = index;
+			p.mouseY=0; //This ensures that a previous mouseY value doesn't trigger an inadvertent article selection
+			
+			 //Record click on search terms       
+            var params = $('#viz_term_feedback').data('viz_feedback_params'); //Feedback params can also be used for regular click tracking
+            params['type'] = 'search_term_click'; //override feedback value
+            params['total_articles'] = LongView.search_term_timelines[LongView.search_term_timelines_curr_index].articles.length
+            delete params['extra']; //don't need this param for search term clicks
+			var param_str = '';
+			for (i in params) {
+				param_str+=i+"="+params[i]+"&"			
+			}
+			$.ajax({
+				type: 'GET',
+				url: "http://"+LongView.server+"/internal_click",
+				data: param_str.substring(0,param_str.length-1), //remove final ampersand
+			});
+		});
+	});
+	
+	//Add Search Term Feedback div
+	$('body').append("<div class='viz_obj' id='viz_thankyou'>Thank You!</div>"); //this thank you is re-positioned for article feedback too
+	$('#viz_header').append("<div class='viz_feedback viz_obj' id='viz_term_feedback'><span id='viz_term_up'><img height=20 src='http://"+LongView.server+"/imgs/thumbs-up.png'/>"+
+		"</span><span id='viz_term_down'><img height=20 src='http://"+LongView.server+"/imgs/thumbs-down.png'/></span></div>");
+	$('#viz_term_feedback').css({'width':t_width/LongView.search_terms.length+'px'});
+	
+	//Add click function to collect thumbs up vote on search_terms
+	$('#viz_term_up').click(function(){
+		var params = $('#viz_term_feedback').data('viz_feedback_params'); //Storing feedback parameters in the data object
+		var param_str = '';
+		for (i in params) {
+			param_str+=i+"="+params[i]+"&"			
+		}
+		$.ajax({
+			type: 'GET',
+			url: "http://"+LongView.server+"/feedback",
+			data: param_str+"feedback=thumbs_up",
+		});
+		var offset = $('#viz_term_feedback').offset();
+		$('#viz_thankyou').css({'top': offset.top, 'left': offset.left+($('#viz_term_feedback').width()-100)/2});
+		$('#viz_thankyou').show();
+		$('#viz_thankyou').fadeOut(2000);
+	});
+	
+	//Add click function to collect thumbs down vote on search_terms
+	$('#viz_term_down').click(function(){
+		var params = $('#viz_term_feedback').data('viz_feedback_params'); //Storing feedback parameters in the data object
+		var param_str = '';
+		for (i in params) {
+			param_str+=i+"="+params[i]+"&"			
+		}
+		$.ajax({
+			type: 'GET',
+			url: "http://"+LongView.server+"/feedback",
+			data: param_str+"feedback=thumbs_down",
+		});
+		var offset = $('#viz_term_feedback').offset();
+		$('#viz_thankyou').css({'top': offset.top, 'left': offset.left+($('#viz_term_feedback').width()-100)/2});
+		$('#viz_thankyou').show();
+		$('#viz_thankyou').fadeOut(2000);
+	
+	});
+	
+	// Position Canvas, Search Term Boxes, and add Main background div
+	LongView.timelines_h = $(window).height()-$('#viz_title').outerHeight(true)-$('#viz_header').outerHeight(true);
+	$('#viz_canvas1').css({'top':$(window).scrollTop()+$('#viz_title').outerHeight(true),
+		'width':LongView.timelines_w+'px','height':LongView.timelines_h+'px'});
+	$('#viz_header').css({'top':$(window).scrollTop()+$('#viz_title').outerHeight(true)+$('#viz_canvas1').height()});
+	
+	//#viz_main is just for adding a background color -- canvas is transparent instead of colored so 
+	//some html elements can float below
+	$('body').append('<div class="viz_obj" id="viz_main"></div>'); 
+	$('#viz_main').css({'top':$(window).scrollTop(),'width':LongView.timelines_w+'px','height':$(window).height()+'px'});
+	
+}
+
+/*
+	LongView.attach_article_content function
+	
+	Called from LongView.snakeTimeline on mouseover of an article title. This function adds the #viz_content div
+	that will contain the selected article's body. It also adds a feedback div to itself in order to
+	collect thumbs up info, along with article context from the user.
+		
+*/
+
+LongView.attach_article_content = function(){
+	$('body').append("<div class='viz_obj' id='viz_content'></div>");
+	$('#viz_content').append("<div class='viz_feedback' id='viz_article_feedback'>"+
+			"<img height=20 src='http://"+LongView.server+"/imgs/thumbs-up-trans.png'/></div><div id='viz_body'></div>");
+	
+	//Add click function to collect thumbs up vote on selected article
+	$('#viz_article_feedback').click(function(){
+		var params = $('#viz_article_feedback').data('viz_article_feedback'); //Get feedback parameters from data object,
+						 													//these params are set in LongView.update_article_content
+		var param_str = '';
+		for (i in params) {
+			param_str+=i+"="+params[i]+"&"			
+		}
+		$.ajax({
+			type: 'GET',
+			url: "http://"+LongView.server+"/feedback",
+			data: param_str+"feedback=thumbs_up",
+		});
+		var offset = $('#viz_article_feedback').offset();
+		$('#viz_thankyou').css({'top': offset.top, 'left': offset.left+$('#viz_article_feedback').width()});
+		$('#viz_thankyou').show();
+		$('#viz_thankyou').fadeOut(2000);
+	});
+}
+
+/*
+	LongView.update_article_content function
+	
+	@params: article - Article object
+			 w - available width for the article body
+	
+	Called from LongView.snakeTimeline on mouseover of an article title. This function positions #viz_content
+	relative to the article's title. It also populates #viz_content with the article body, and adds 
+	article info and The Long View context (date, main article url, etc) to #viz_article_feedback's data object.
+	The will be read if the feedback div is clicked.
+		
+*/
+
+LongView.update_article_content = function(article,w){
+
+	//x,y positions are for relative to the window, for absolute positioning
+	var x = article.trans.x+5;
+    var y = article.trans.y+$('#viz_article'+LongView.selected_article).outerHeight()+
+    		$(window).scrollTop()+$('#viz_title').height();
+	
+	//Re-position article content div if the article is moving	
+	if ($("#viz_content").css('top')!=Math.round(y)+"px"||$("#viz_content").css('left')!=Math.round(x)+"px"){
+		$("#viz_content").css({'top':Math.round(y),'left':Math.round(x),'width':w+'px'});
+		
+		//add click tracking
+		var this_url = 'http://'+LongView.server+'/click?redirect='+encodeURIComponent(article.url)+
+			'&user_id='+encodeURIComponent(LongView.user_id)+"&main_url="+encodeURIComponent(document.URL)+
+			'&search_terms='+encodeURIComponent(article.search_terms)+'&search_date='+encodeURIComponent(new Date());
+		$("#viz_body").html("<a target='_blank' href='"+this_url+"'>"+article.body+"</a>");
+		$("#viz_content").fadeIn(1200);
+		
+		//Collect selected article info and attach it to data object for use with feedback click
+		var params = {};
+		params['user_id'] = LongView.user_id;
+		params['search_date'] = new Date();
+		params['main_url'] = document.URL;
+		params['type'] = 'article_feedback';
+		params['value'] = article.url;	
+		params['extra'] = article.search_terms;
+		for (i in params) {
+			params[i] = encodeURIComponent(params[i]);
+		}					
+		$('#viz_article_feedback').data('viz_article_feedback',params);
+	} 
+}
+
+/*
+	LongView.attach_article_title function
+	
+	@params: id - index of article in timeline
+			 a - Article object
+			 w - available width for title
+			 title_len - pixel width of title (derived from Processing's textWidth)
+			 selected - boolean, true if the current article is selected
+	
+	Called from LongView.snakeTimeline for each article in the selected timeline. This function creates
+	and positions individual title divs for the specified article. In addition, the function determines
+	if the length of the article title should be truncated given the available space (determined by Article.h) 
+	for the article title.
+		
+*/
+
+LongView.attach_article_title = function(id,a,w,title_len,selected){
+	var x_pos = 20;
+	var y_pos = 2;
+    var x = a.trans.x+x_pos;
+    w = w-x_pos; //substract what was adding to x
+    var y = a.trans.y+y_pos+$(window).scrollTop()+$('#viz_title').height()
+    if ($("#viz_article"+id).length==0) {
+        $('body').append("<div class='viz_articles viz_obj' id='viz_article"+id+"'><span class='viz_title'>"+a.title+"</span></div>");
+   		
+   		//it would be great to add click tracking on the title, but the titles are positioned on a z-index below
+   		//the canvas elements so we can take advantage of p.mouse knowledge; which means you can't click on them
+   }
+    
+    //Re-position article title div if the article is moving
+    if ($("#viz_article"+id).css('top')!=Math.round(y)+"px"||$("#viz_article"+id).css('left')!=Math.round(x)+"px"){
+        $("#viz_article"+id).css({'top':Math.round(y),'left':Math.round(x),'width':w+'px'});
+        
+        //If the allocated height for an article prevents the whole title from being visible, truncate the title
+        var _title = a.title; //make a copy of the title
+        var line_ht = $("#viz_article"+id).css('line-height').replace(/px/,''); //get the line-height of the article title div
+        var len = Math.floor((a.h-y_pos)/line_ht)*w; //get the avaible pixel space for the title by multiplying the width of the div by 
+        									//the article's allotted height divided by the line-height -- taking the floor of this last bit
+        									//will give the number of lines available for the title display
+        if (len<title_len&&selected==false) {	//title_len is a pixel length for the title -- it's derived from processing's textWidth function
+            if (len>0) { //if there's any space at all...
+                var pct_str = Math.round((len-30*Math.floor((a.h-y_pos)/line_ht))/title_len*a.title.length); //use pixel length percentage as a proxy 
+                																							//for how many characters should be chopped off
+                _title = a.title.substr(0,pct_str-3).replace(/\S+$/,'')+"..."; //truncate title and delete any straggling letters; 
+                																//subtract 3 from pct_str to account for ellipsis
+            } else {
+                _title = "";
+            }
+        }
+        $("#viz_article"+id).children(".viz_title").text(_title);
+    }
+}
+
+/*
+	LongView.reset_articles function
+	
+	@params: timeline - either DecadeTimeLine object or SearchTermsTimeLine object
+			 index - index of timeline object in its timelines array
+	
+	Called from LongView.snakeTimeline everytime a new timeline (decade_timeline or search_term_timeline)
+	is selected. This function sends previously selected articles back to their original position,
+	and depending on what kind of timeline is being reset, it assigns selected_article or 
+	decade_timelines_curr_index back to their default values.
+		
+*/
+LongView.reset_articles = function(timeline,index){
+    if ($("#viz_content").length>0){
+        $("#viz_content").remove();
+    }
+    
+    //Move articles back to their original position on the decades timeline
+    if (index!="1000"||timeline==LongView.search_term_timelines) { //check that timeline is not decade timeline with no selected articles
+        var articles = timeline[index].articles;
+        $.each(articles,function(i) {
+            var a = articles[i];
+            a.trans.x = a.orig.x;
+            a.trans.y = a.orig.y;
+        });
+    }
+    if (timeline==LongView.search_term_timelines) {
+    	LongView.selected_article = 1000;
+    }
+    if (timeline==LongView.decade_timelines) {
+		LongView.decade_timelines_curr_index = "1000";
+	}
+	LongView.ht_loop=0;
+}
+
+
+/*
+	LongView.snakeTimeLine function
+	
+	@params: p - the Processing.js object
+	
+	Called from LongView.getArticleText -> LongView.processingSketch. This is the main visualization function
+	for The Long View. It draws the processing elements of the visualization, as well as controlling
+	the existence, visibility, and positioning of the accompanying html elements.
+		
+*/ 
+
+LongView.snakeTimeLine = function(p) {	
+	var timeline_start = new Date(2011,11,31);
+	var timeline_end = new Date(1972,0,1);
+	var decade_range = {};
+	var all_articles = new Array(); //all articles returned from server, regardless of timeline assignments
+	var selected_articles = [];	
+	var article_dates = {};
+	//var loops = 0; Saving for another day when there will be an auto mode
+	//var random_article;
+	//var loop_on=0;
+	//var ht_loop=0;
+	var top_y = 5;
+	var bottom_y;
+	var line_margin = 30;	
+	var highlight_h = 45;
+	var date_w = 100;
+	var right_margin = 0;
+	var left_margin = 40 + line_margin;
+	var title_margin = 40;
+	var content_h = 140;
+	var max_title_w = 300;
+	var total_highlight_w = LongView.timelines_w-left_margin-right_margin;
+	var title_w = total_highlight_w - date_w - title_margin;
+	if (title_w>max_title_w) {
+		title_w = max_title_w
+		var new_margin = (total_highlight_w - title_w - date_w - title_margin)/2;
+		left_margin = left_margin + new_margin;
+	}
+	
+	LongView.html_scaffolding(p);
+
+	p.setup = function(){
+		p.size(LongView.timelines_w,LongView.timelines_h);		
+		bottom_y = p.height-5;
+		p.background(255,0);
+		p.noStroke();
+		p.rectMode(p.CENTER);
+		
+		//Get oldest article and newest article dates, regardless of which timeline the articles come from
+		$.each(LongView.search_term_timelines,function(i) {
+			var t = LongView.search_term_timelines[i];
+			$.each(t.articles,function(k) {
+				timeline_start = timeline_start.getTime()>t.articles[k].date.getTime()?t.articles[k].date:timeline_start;
+				timeline_end = timeline_end.getTime()<t.articles[k].date.getTime()?t.articles[k].date:timeline_end;
+			});
+		});
+		
+		//Set x and y for each article on the decades timeline
+		$.each(LongView.search_term_timelines,function(i) {
+			var t = LongView.search_term_timelines[i];
+			$.each(t.articles,function(k) {
+				var a = t.articles[k];
+				a.orig = new p.PVector();
+				a.trans = new p.PVector();
+				a.dest = new p.PVector();
+				p.fill(0,0,100,255);
+				var a_y = p.map(t.articles[k].date,timeline_end,timeline_start,top_y,bottom_y);
+				a.orig.x = line_margin;
+				a.orig.y = a_y;
+				a.trans.x = a.orig.x;
+				a.trans.y = p.constrain(a.orig.y,top_y,bottom_y);
+				a.dest.x = left_margin;
+				a.dest.y = a.orig.y;
+				
+				all_articles.push(a);
+				if (article_dates[a.date.toString()]) {
+					article_dates[a.date.toString()].push(a);
+				} else {
+					article_dates[a.date.toString()] = new Array();
+					article_dates[a.date.toString()].push(a);
+				}
+			});
+		});
+		
+		//Get all decades that exist in the superset of articles, using timeline_start and timeline_end
+		var start_decade = timeline_start.getFullYear().toString().substr(0,3)+"0"
+		var end_decade = timeline_end.getFullYear().toString().substr(0,3)+"0"
+		var curr_decade = parseInt(start_decade);
+		while (curr_decade<parseInt(end_decade)+1) {
+			var begin_date = curr_decade.toString()==start_decade?timeline_start:new Date(curr_decade,0,1);
+			var end_date = curr_decade.toString()==end_decade?timeline_end:new Date(curr_decade+9,11,31);
+			decade_range[curr_decade.toString()] = [p.map(begin_date,timeline_end,timeline_start,top_y,bottom_y),
+				p.map(end_date,timeline_end,timeline_start,top_y,bottom_y)]; //decade range gives us coordinates for the decade rect
+			curr_decade+=10;			
+		}
+		
+	}
+
+	p.draw = function(){
+		selected_articles = [];
+		p.background(255,0);
+		p.stroke(220);
+		p.strokeWeight(.5);
+		p.line(line_margin,top_y,line_margin,p.height-20);
+		p.fill(140);
+		p.textSize(16);
+		p.textAlign(p.LEFT);
+		
+		//Draw a rectangle on the timeline for each decade 
+		$.each(decade_range,function(i){
+			p.fill(118,90,58,(2020-i)/10%2*20+20);
+			p.rectMode(p.CORNER);
+			p.rect(0,decade_range[i][1],line_margin,decade_range[i][0]-decade_range[i][1]);
+			
+			//Orient the decade name at a -90-degree angle
+			p.pushMatrix();
+				p.translate(line_margin/3*2,decade_range[i][1]+(decade_range[i][0]-decade_range[i][1])/2);
+				p.textAlign(p.CENTER);
+				p.rotate(-p.PI/2);
+				p.fill(0);
+				p.text(i+"'s",0,0);
+			p.popMatrix();
+			
+			//If you hover over a decade region, select that decade's articles
+			if (p.mouseX<line_margin&&p.mouseY>decade_range[i][1]&&p.mouseY<decade_range[i][0]){
+                if (i!=LongView.decade_timelines_curr_index) { //Only do this the first time you enter the decade region
+                    LongView.reset_articles(LongView.decade_timelines,LongView.decade_timelines_curr_index);
+                    if ($(".viz_articles").length>0){
+                        $(".viz_articles").remove();
+                    }
+                    LongView.decade_timelines_curr_index=i;
+                    LongView.search_term_timelines_prev_index = LongView.search_term_timelines_curr_index; 
+                    LongView.reset_articles(LongView.search_term_timelines,LongView.search_term_timelines_prev_index); //Unselect keyword timeline if necessary
+                    
+                    //Record mouseover on search terms  
+                      
+		            var param_str = 'user_id='+LongView.user_id+'&main_url='+encodeURIComponent(document.URL)+'&search_date='+encodeURIComponent(new Date())+
+		            	'&value='+LongView.decade_timelines_curr_index+'&total_articles='+
+		            	LongView.decade_timelines[LongView.decade_timelines_curr_index].articles.length+'&type=decade_mouseover';
+					$.ajax({
+						type: 'GET',
+						url: "http://"+LongView.server+"/internal_click",
+						data: param_str
+					});
+	           	}
+			}
+		});
+		
+		
+		//Draw article tics on the decade timeline
+		p.textSize(12);
+		p.textAlign(p.LEFT);
+		p.rectMode(p.CENTER);
+		$.each(all_articles,function(i) {
+			var a = all_articles[i];
+			a.dest.y = a.orig.y;
+			var col = LongView.time_colors[LongView.search_terms.indexOf(a.search_terms)]; //Get colors based on the articles search_terms
+			p.stroke(col[0],col[1],col[2],200);
+			p.strokeWeight(2);
+			p.strokeCap(p.SQUARE);
+			p.line(a.orig.x-5,a.orig.y,a.orig.x+10,a.orig.y);
+		});
+		
+		//Get the articles from whichever timeline is currently selected
+		var _articles;
+		if (LongView.decade_timelines_curr_index!="1000") { 
+			_articles = LongView.decade_timelines[LongView.decade_timelines_curr_index].articles;
+		} else {
+			_articles = LongView.search_term_timelines[LongView.search_term_timelines_curr_index].articles;
+		}	
+		
+		//Sort articles first by date, but if the date is the same, sort by title	
+		_articles.sort(function sortDate(a,b){
+			if (b.date.getTime()-a.date.getTime()==0) {
+				var _a = a.title.toLowerCase();
+				var _b = b.title.toLowerCase();
+				return ((_a < _b) ? -1 : ((_a > _b) ? 1 : 0));
+			} else {
+				return b.date.getTime()-a.date.getTime();
+			}
+		});
+		
+		//Set y and height for selected timeline's articles
+		var a_length = _articles.length;
+		var a_top_y = top_y+10+content_h/2;
+		var _total_h = bottom_y-a_top_y-content_h;	
+		var _sum = 0;	
+
+		//Some fancy footwork here to deal with more articles than can fit nicelys;
+		//spread the articles by an exponential distance from the selected article
+		if (highlight_h*a_length>_total_h) {
+			//if an article isn't selected, choose an article in the middle of the timeline as the focal point
+			var _focus_a = LongView.selected_article==1000?Math.floor(_articles.length/2):LongView.selected_article; 
+			
+			//get a sum of the difference between the total number of articles and the distance between 
+			//each individual article and the focal article
+			$.each(_articles,function(j) {
+				_sum += (_articles.length-Math.abs(_focus_a-j));
+			});	
+			
+			//do that difference/distance thing again for an individual article and this time calculate the 
+			//percent of the previous _sum using this percent calculate how much of the available pixels 
+			//the article's height should have
+			$.each(_articles,function(i) {
+				var a = _articles[i];
+				var height_perct = (_articles.length-Math.abs(_focus_a-i))/_sum;
+				a.h = Math.round(height_perct * _total_h); //actual height is going to be an average later; fixes blinking title bug			
+				var _new_articles = _articles.slice(0,i);
+				var _top = a_top_y;
+				$.each(_new_articles,function(k) {
+					_top+=_new_articles[k].h; //what is the total height of the all the articles above the current one; 
+											//this gives you the current y
+				});
+				a.dest.y = _top;
+			});
+		} else { //all that stuff isn't necessary if the articles fit at normal height (highlight_h) in the alloted space
+			a_top_y = (bottom_y-top_y-a_length*highlight_h)/2+top_y;
+			$.each(_articles,function(i) {
+				var a = _articles[i]
+				a.dest.y = a_top_y + highlight_h*i;
+				a.h = highlight_h;
+			});		
+		}
+		
+		
+		//Draw selected timeline articles in the center of the visualization; drawing includes color-coded
+		//rectangle, formatted date, article title (html element), a line from the article's tic mark
+		//on the decades timeline to the rectangle position, and an exaggerated tic mark on the timeline
+		$.each(_articles,function(i) {
+			var a = _articles[i];
+			var col = LongView.time_colors[LongView.search_terms.indexOf(a.search_terms)];	
+	
+			if (i>LongView.selected_article) {
+				a.dest.y += content_h;
+			} 
+			
+			var acc = p.PVector.sub(a.dest,a.trans); //calculate the difference between the articles 
+													//current position vector and its destination vector
+			var d = acc.mag(); //magnitude gives us length of that vector distance
+			var maxspeed = 10;
+			
+			//add to the articles trans vector until the distance between it and its destination is 0
+			if (d>0){
+				acc.normalize();
+				acc.mult(d/maxspeed);
+				a.trans.add(acc);
+			} 
+			
+			var w = title_w;
+			if ($(".viz_title").length>0){
+				var html_font_size = $(".viz_title").css('font-size').replace(/px/,'');
+				p.textSize(html_font_size); //set text size to get an accurate number for textWidth
+				var html_title_margin = $(".viz_title").css('margin-right').replace(/px/,'');
+				w = w - html_title_margin;
+			}
+			LongView.attach_article_title(i,a,w,p.textWidth(a.title),i==LongView.selected_article);
+            
+			//Check to see if height is big enough for title; if not, don't show date either
+			var curr_ht = Math.floor((a.h-2)/$("#viz_article"+i).css('line-height').replace(/px/,''));
+			if (curr_ht>0){
+				p.stroke(0);
+				p.strokeWeight(.5);
+				p.line(a.trans.x+title_w+title_margin/2,a.trans.y-10,a.trans.x+title_w+title_margin/2,a.trans.y+10);
+				p.fill(176,72,90);
+				p.text(a.date_f(),a.trans.x+title_w+title_margin,a.trans.y-6,date_w,highlight_h);
+			}
+			
+			p.noStroke();
+			p.fill(col[0],col[1],col[2],200);
+			p.rect(a.trans.x,a.trans.y,14,14);
+			p.stroke(0,100);
+			p.strokeWeight(.5);
+			p.line(a.orig.x,a.orig.y,a.trans.x,a.trans.y);
+			p.fill(0);
+			
+			//If the mouse is in the region of the article title, show the article body
+			if (p.mouseX>a.dest.x&&p.mouseY>a.trans.y&&p.mouseY<a.trans.y+a.h){
+				if (i!=LongView.selected_article) {
+					if (LongView.selected_article!=1000){
+						$('#viz_article'+LongView.selected_article).css({'font-weight':'normal'});	
+					} 
+					$('#viz_article'+i).css({'font-weight':'bold'});
+					
+					if ($("#viz_content").length==0) {
+						LongView.attach_article_content();
+					} else {
+						$("#viz_content").hide();
+					}
+				}
+				
+				LongView.selected_article = i;	
+			}
+		});
+		
+		//For the selected article, update content and position of article body; also extend its tic on the decade timeline
+        if (LongView.selected_article!=1000) {
+            var a = _articles[LongView.selected_article];
+            var margin_top = p.ceil(p.textWidth(a.title)/title_w);
+            
+            LongView.update_article_content(a,title_w+title_margin+p.textWidth(a.date_f()));
+            content_h = $('#viz_body').outerHeight(true)+$('#viz_article_feedback').outerHeight(true)+$('#viz_article'+LongView.selected_article).outerHeight(true)-a.h;
+            var col = LongView.time_colors[LongView.search_terms.indexOf(a.search_terms)];
+			p.stroke(col[0],col[1],col[2]);
+			p.strokeWeight(2);
+			p.strokeCap(p.SQUARE);
+            p.line(0,a.orig.y,a.orig.x+10,a.orig.y);
+        }
+	}	
+}
+
+/*
+	LongView.processingSketch function
+	
+	@params: sketch - function, the function that calls a Processing sketch, e.g. snakeTimeline
+	
+	Called from LongView.getArticleText for each Processing sketch. This function adds a new canvas
+	element to the window, and then creates an instance of Processing.js that assigns the sketch to
+	the created canvas element.  This process also calls the sketch function.
+		
+*/ 
+
+LongView.processingSketch = function(sketch,msg) {
+	$('body').append("<canvas class='viz_obj' id='viz_canvas1'></canvas>");	
+    $('#viz_canvas1').css({'top':$(window).scrollTop(),'height':$(window).height()+'px'});
+	var canvas = document.getElementById("viz_canvas1");
+	var p = new Processing(canvas,sketch);
+}
+
+/*
+	LongView.createTimeLines function
+		
+	Called from LongView.getArticleText if the server successfully returns a json object of articles. 
+	This function creates both DecadeTimeLine objects and SearchTermsTimeLine objects. It sends a json
+	object of articles to the SearchTermsTimeLine class where Article objects are created; these Article
+	objects are subsequently pushed to the appropriate DecadeTimeLine created below.
+		
+*/
+
+LongView.createTimeLines = function() {
+	var j=0;
+	LongView.decade_timelines["1980"] = new LongView.DecadeTimeLine("1980");
+	LongView.decade_timelines["1990"] = new LongView.DecadeTimeLine("1990");
+	LongView.decade_timelines["2000"] = new LongView.DecadeTimeLine("2000");
+	LongView.decade_timelines["2010"] = new LongView.DecadeTimeLine("2010");
+	
+	$.each(LongView.response,function(i) {
+		if (LongView.response[i]['results'].length>0) {
+			var time_line = new LongView.SearchTermsTimeLine(LongView.response[i]);
+			LongView.search_term_timelines.push(time_line);
+			time_line.y = 30;
+
+			//Set x and ybased on how many search terms returned from the server
+			time_line.x = LongView.timelines_w/Object.keys(LongView.response).length*j+
+					LongView.timelines_w/Object.keys(LongView.response).length/2;
+			time_line.w = (LongView.timelines_w-20)/Object.keys(LongView.response).length;
+			
+			//add the current search terms to the array of search terms
+			LongView.search_terms.push(LongView.response[i]['term']); 
+		}
+		j++;
+	});
+}
+
+/*
+	LongView.startup function
+		
+	Called from LongView.getArticleText everytime. This function moves the NYT article to the left of
+	the screen, calculates the remaining width available for The Long View visualization, and kicks
+	off the LongView.waiting function that runs until a response from the server is received.
+		
+*/
+
+LongView.startup = function(){
+	$("#shell").css({'position':'absolute','top':0,'right':0});
+	LongView.timelines_w = ($(window).width()-$('#shell').width())>400?($(window).width()-$('#shell').width()):400;	
+	LongView.processingSketch(LongView.waiting); //start the green circle sketch
+}
+
+/*
+	LongView.reset function
+		
+	Called from LongView.getArticleText everytime. In the event that getArticleText is called twice in the
+	same window, this function removes all html elements from the previous visualization, and resets
+	selected_article and decade_timelines_curr_index to their default values.
+		
+*/
+
+LongView.reset = function(){
+	if ($('.viz_obj').length>0){
+		$('.viz_obj').remove();
+	}
+    LongView.selected_article = 1000;
+    LongView.decade_timelines_curr_index = "1000";
+}
+
+/*
+	LongView.getArticleText function
+	
+	
+	@params: type - the kind of visualization to be displayed; right now there is only one -- 'snake' --
+					but others could be added in the future
+			 json_type - tells the server what kind of json object to return; default is 'by_term'
+	@params are set in the bookmarklet script
+		
+	Called from the bookmarklet script. This function calls the server to request articles. It also 
+	determines what kind of sketch should be called, and handles the transition between the waiting
+	sketch and the subsequent sketch.
+		
+*/
+
+LongView.getArticleText = function(type,json_type,user_id){
+	LongView.reset();
+	LongView.startup();
+	LongView.user_id = user_id;
+	var sketchKeys = {};
+	sketchKeys['failure'] = LongView.requestFailed;
+	sketchKeys['snake'] = LongView.snakeTimeLine; //this is the main Long View Visualization
+	
+	$.ajax({
+	  	type: 'GET',
+	  	url: "http://"+LongView.server+"/single_article",
+	  	data: 'url='+encodeURIComponent(document.URL)+'&type='+json_type+'&user_id='+LongView.user_id,
+	  	async: true,
+	  	dataType: "jsonp",
+	  	success: function(data){
+			LongView.response = data[0]['main'];
+			var msg = '';
+			if (jQuery.isEmptyObject(LongView.response)||data[0]['status']=='FAILED') {
+				type = 'failure'
+				LongView.response_msg = data[0]['status_msg']
+			} else if (data[0]['status']=='NO RESULTS') {
+				type = 'failure'
+				LongView.response_msg =  data[0]['status_msg']
+			} else if (LongView.search_term_timelines.length==0) {
+				LongView.createTimeLines();
+			}
+			$('#viz_canvas1').fadeOut('slow', function() {
+				$(this).remove();
+				LongView.processingSketch(sketchKeys[type],msg);
+			});
+		}
+	});
+}
+
+//Adjust positioning of canvas, et al on scroll, so the visualization stays with you as you scroll 
+//through the main article
+$(window).scroll(function(){
+	$('#viz_main').css({'top':$(window).scrollTop()});
+	$('#viz_canvas1').css({'top':$(window).scrollTop()+$('#viz_title').outerHeight(true)});
+	$('#viz_about').css({'top':$(window).scrollTop()+$('#viz_title').outerHeight(true)});
+	$('#viz_title').css({'top':$(window).scrollTop()});
+	$('#viz_header').css({'top':$(window).scrollTop()+$('#viz_title').outerHeight(true)+$('#viz_canvas1').height()});
+	$("#viz_content").remove();
+	LongView.selected_article = 1000;
+});
+
+//Adjust positioning of canvas, et al on resize, so the visualization stays with you as you resize 
+//through the main article
+$(window).resize(function(){
+	LongView.timelines_h = $(window).height();
+	LongView.timelines_w = ($(window).width()-$('#shell').width());
+	LongView.timelines_h = $(window).height()-$('#viz_title').outerHeight(true)-$('#viz_header').outerHeight(true);
+	$('#viz_canvas1').css({'top':$(window).scrollTop()+$('#viz_title').outerHeight(true),
+		'width':LongView.timelines_w+'px','height':LongView.timelines_h+'px'});
+	$('#viz_header').css({'top':$(window).scrollTop()+$('#viz_title').outerHeight(true)+$('#viz_canvas1').height()});
+	$('#viz_main').css({'top':$(window).scrollTop(),'width':LongView.timelines_w+'px','height':$(window).height()+'px'});
+});
+
+//When this script loads, attach the necessary css file to the NYT head
+$('head').append('<link id="main_css" rel="stylesheet" href="http://'+LongView.server+'/css/main.css">');
